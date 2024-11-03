@@ -252,7 +252,7 @@ def plot_experiment_mean_node_pressure(
         )
 
         fig.savefig(
-            f"{experiment_folder}/{key}mean_node_pressure.png", format="png", dpi=300
+            f"{experiment_folder}/{key}_mean_node_pressure.png", format="png", dpi=300
         )
         plt.close(fig)
 
