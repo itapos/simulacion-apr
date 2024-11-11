@@ -5,9 +5,24 @@ from wntr.network import WaterNetworkModel
 from decimal import Decimal, ROUND_HALF_UP
 import networkx as nx
 import pickle
+from scipy.stats import lognorm
 
 from utils.types import NetworkPriorityNodes, MitigationLeaksStrategyOptions
 
+def get_damage_states(pga_values:list[float], inp_file:str):
+    wn = WaterNetworkModel(inp_file)
+    FC = wntr.scenario.FragilityCurve()
+    FC.add_state("Moderado", 1, {"Default": lognorm(0.163, scale=1.2 * 0.379)})
+    FC.add_state("Mayor", 2, {"Default": lognorm(0.225, scale=1.2 * 0.385)})
+
+    pga_and_damage_states_list=[]
+    for pga_value in pga_values:
+        pga = pd.Series(pga_value, index=wn.pipe_name_list)
+        failure_probability = FC.cdf_probability(pga)
+        damage_states = FC.sample_damage_state(failure_probability)
+        pga_and_damage_states_list.append((pga_value,damage_states))
+    
+    return pga_and_damage_states_list
 
 def get_network_priority_nodes(
     wn_filepath: str, mean_node_pressure: pd.Series
@@ -16,50 +31,91 @@ def get_network_priority_nodes(
         wn = pickle.load(f)
 
     return {
-        "betweenness": order_by_betweenness(wn),
-        "closeness": order_by_closeness(wn),
-        "pressure": order_by_pressure(wn, mean_node_pressure),
-        "node_degree": order_by_node_degree(wn),
+        "betweenness": order_pipes_by_betweenness(wn),
+        "closeness": order_pipes_by_closeness(wn),
+        "pressure": order_pipes_by_pressure(wn, mean_node_pressure),
+        "node_degree": order_pipes_by_node_degree(wn),
     }
 
 
-def order_by_betweenness(wn: WaterNetworkModel) -> list[str]:
-    G = wn.get_graph()
+def order_pipes_by_betweenness(wn: WaterNetworkModel) -> list[str]:
+    import networkx as nx
+    
+    # Obtener el grafo de la red
+    G = wn.to_graph()
+    
+    # Calcular la betweenness centrality de los nodos
     bc = nx.betweenness_centrality(G, normalized=True, weight="length")
+    
+    # Calcular la betweenness centrality promedio para cada tubería
+    pipe_centrality = {}
+    for pipe_name, pipe in wn.links():
+        if pipe.link_type == "Pipe":  # Asegurarse de considerar solo tuberías
+            start_node = pipe.start_node.name
+            end_node = pipe.end_node.name
+            # Promedio de la centralidad de los nodos de inicio y fin
+            pipe_centrality[pipe_name] = (bc[start_node] + bc[end_node]) / 2
 
-    # Order pipesby betweenness centrality
-    sorted_pipes = sorted(bc.items(), key=lambda x: x[1], reverse=True)
+    # Ordenar las tuberías por su centralidad promedio (de mayor a menor)
+    sorted_pipes = sorted(pipe_centrality.items(), key=lambda x: x[1], reverse=True)
+    
+    # Retornar solo los nombres de las tuberías ordenadas
     sorted_pipe_names = [pipe_name for pipe_name, _ in sorted_pipes]
     return sorted_pipe_names
 
 
-def order_by_closeness(wn: WaterNetworkModel) -> list[str]:
-    G = wn.get_graph()
+def order_pipes_by_closeness(wn: WaterNetworkModel) -> list[str]:
+    import networkx as nx
+    
+    # Obtener el grafo de la red
+    G = wn.to_graph()
+    
+    # Calcular la closeness centrality de los nodos
     cc = nx.closeness_centrality(G, distance="length")
+    
+    # Calcular la closeness centrality promedio para cada tubería
+    pipe_centrality = {}
+    for pipe_name, pipe in wn.links():
+        if pipe.link_type == "Pipe":  # Asegurarse de considerar solo tuberías
+            start_node = pipe.start_node.name
+            end_node = pipe.end_node.name
+            # Promedio de la centralidad de los nodos de inicio y fin
+            pipe_centrality[pipe_name] = (cc[start_node] + cc[end_node]) / 2
 
-    # Order pipesby closeness centrality
-    sorted_pipes = sorted(cc.items(), key=lambda x: x[1], reverse=True)
+    # Ordenar las tuberías por su centralidad promedio (de mayor a menor)
+    sorted_pipes = sorted(pipe_centrality.items(), key=lambda x: x[1], reverse=True)
+    
+    # Retornar solo los nombres de las tuberías ordenadas
     sorted_pipe_names = [pipe_name for pipe_name, _ in sorted_pipes]
     return sorted_pipe_names
 
 
-def order_by_node_degree(wn: WaterNetworkModel) -> list[str]:
-    G = wn.get_graph()
-    degree = G.degree()
-
+def order_pipes_by_node_degree(wn: WaterNetworkModel) -> list[str]:
+    # Crear un diccionario para almacenar el grado de cada nodo
     node_degree = {}
     nodes = wn.node_name_list
     for node_name in nodes:
-        links = wn.get_links_for_node(node_name)
-        degree = len(links)
+        links = wn.get_links_for_node(node_name)  # Obtener las tuberías conectadas al nodo
+        degree = len(links)  # El grado del nodo es el número de conexiones
         node_degree[node_name] = degree
 
-    sorted_pipes = sorted(node_degree.items(), key=lambda x: x[1], reverse=True)
+    # Calcular el promedio del grado de los nodos conectados a cada tubería
+    pipe_centrality = {}
+    for pipe_name, pipe in wn.links():
+        if pipe.link_type == "Pipe":  # Considerar solo tuberías
+            start_node = pipe.start_node.name
+            end_node = pipe.end_node.name
+            # Promedio del grado de los nodos de inicio y fin
+            pipe_centrality[pipe_name] = (node_degree[start_node] + node_degree[end_node]) / 2
+
+    # Ordenar las tuberías por el promedio de los grados de sus nodos (de mayor a menor)
+    sorted_pipes = sorted(pipe_centrality.items(), key=lambda x: x[1], reverse=True)
+
+    # Retornar solo los nombres de las tuberías ordenadas
     sorted_pipe_names = [pipe_name for pipe_name, _ in sorted_pipes]
     return sorted_pipe_names
 
-
-def order_by_pressure(
+def order_pipes_by_pressure(
     wn: WaterNetworkModel, mean_node_pressure: pd.Series
 ) -> list[str]:
     avg_pressure = {}
@@ -150,13 +206,15 @@ def generate_leaks(
         if damage_state is not None:
             if damage_state == "Mayor":
                 leak_diameter = 0.1 * pipe_diameter
+                leak_diameter = min(leak_diameter, 0.0050)
                 if pipe_name in reinforced_pipes:
-                    leak_diameter = leak_diameter * 0.5
+                    leak_diameter = leak_diameter * 0.1
                 leak_area = np.pi * (leak_diameter / 2) ** 2
             elif damage_state == "Moderado":
                 leak_diameter = 0.05 * pipe_diameter
+                leak_diameter = min(leak_diameter, 0.0025)
                 if pipe_name in reinforced_pipes:
-                    leak_diameter = leak_diameter * 0.5
+                    leak_diameter = leak_diameter * 0.1
                 leak_area = np.pi * (leak_diameter / 2) ** 2
             else:
                 leak_area = 0

@@ -27,6 +27,7 @@ def simulate_wrapper(
     total_duration: int,
     minimum_pressure: float,
     pga_value: float,
+    damage_states: pd.Series,
     output_folder: str,
 ):
     try:
@@ -39,10 +40,10 @@ def simulate_wrapper(
         wn.options.hydraulic.required_pressure = required_pressure
 
         if simulation_type == "Earthquake":
-            pga = generate_pga_series(pga_value, wn)
+            # pga = generate_pga_series(pga_value, wn)
             FC = generate_fragility_curve()
-            failure_probability = FC.cdf_probability(pga)
-            damage_states = FC.sample_damage_state(failure_probability)
+            # failure_probability = FC.cdf_probability(pga)
+            # damage_states = FC.sample_damage_state(failure_probability)
             actual_time = time.time()
             formated_time = format_time(start_time, actual_time)
             print(
@@ -95,6 +96,7 @@ def simulate_wrapper(
             metrics["num_major_damages"] = major_damages
             metrics["num_moderate_damages"] = moderated_damages
             metrics["pga"] = pga_value
+            metrics["damage_states"] = damage_states
 
         G = wn.get_graph()
 
@@ -134,10 +136,33 @@ def simulate_wrapper(
         head = simulation_results.node["head"]
         pressure = simulation_results.node["pressure"]
         demand = simulation_results.node["demand"]
+        flowrate = simulation_results.link["flowrate"]
         pump_flowrate = simulation_results.link["flowrate"].loc[:, wn.pump_name_list]
-        todini: pd.Series = wntr.metrics.todini_index(
-            head, pressure, demand, pump_flowrate, wn, required_pressure
-        )
+
+        Pout = demand.loc[:,wn.junction_name_list]*head.loc[:,wn.junction_name_list]
+        elevation = head.loc[:,wn.junction_name_list]-pressure.loc[:,wn.junction_name_list]
+        Pexp = demand.loc[:,wn.junction_name_list]*(required_pressure+elevation)
+
+        Pin_res = -demand.loc[:,wn.reservoir_name_list]*head.loc[:,wn.reservoir_name_list]
+
+        headloss = pd.DataFrame()
+        for name, link in wn.pumps():
+            if name != '1':
+                start_node = link.start_node_name
+                end_node = link.end_node_name
+                start_head = head.loc[:,start_node] # (m)
+                end_head = head.loc[:,end_node] # (m)
+                headloss[name] = end_head - start_head # (m)
+            
+        Pin_pump = flowrate.loc[:,wn.pump_name_list]*headloss.abs()
+
+        todini: pd.Series = (Pout.sum(axis=1) - Pexp.sum(axis=1))/  \
+            (Pin_res.sum(axis=1) + Pin_pump.sum(axis=1) - Pexp.sum(axis=1))
+        
+        #todini: pd.Series = wntr.metrics.todini_index(
+        #   head, pressure, demand, pump_flowrate, wn, required_pressure
+        #)
+
         metrics["todini"] = todini
 
         # WSA
@@ -167,7 +192,8 @@ def simulate_wrapper(
         metrics["mean_t_flowrate"] = mean_t_flowrate
 
         demand = simulation_results.node["demand"]
-        mean_t_demand = demand.mean(axis=1)
+        filtered_demand = demand[wn.junction_name_list]
+        mean_t_demand = filtered_demand.sum(axis=1)
         metrics["mean_t_demand"] = mean_t_demand
 
         head = simulation_results.node["head"]
@@ -229,7 +255,7 @@ def simulate_network_parallel(
     leak_start_time: int,
     required_pressure: int,
     num_realizations: int,
-    pga_values: list[float],
+    pga_values_and_damage_states: list[(float, pd.Series)],
     max_workers: int,
     total_duration: int,
     minimum_pressure: float,
@@ -249,7 +275,8 @@ def simulate_network_parallel(
                 i + 1,
                 total_duration,
                 minimum_pressure,
-                pga_values[i] if simulation_type == "Earthquake" else 0,
+                pga_values_and_damage_states[i][0] if simulation_type == "Earthquake" else 0,
+                pga_values_and_damage_states[i][1] if simulation_type == "Earthquake" else 0,
                 output_folder,
             )
             for i in range(num_realizations)

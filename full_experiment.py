@@ -2,11 +2,12 @@ import time
 from datetime import datetime
 import os
 import pandas as pd
-from utils.leaks_utils import get_network_priority_nodes
+from utils.leaks_utils import get_damage_states, get_network_priority_nodes
 from utils.general_utils import format_time, generate_excels, generate_pga_value
 from utils.main_simulation_functions import simulate_network_parallel
 from utils.types import MitigationLeaksStrategyOptions
 import pickle
+import winsound
 
 # =================================== INITIAL PARAMS ===================================
 max_workers = 8
@@ -19,7 +20,7 @@ leak_start_time = 5 * 3600  # seconds
 # Optional (Only for mitigation)
 # mitigation_strategy can be any of "betweenness"|"closeness"|"pressure"|"node_degree"
 mitigation_strategies = ["betweenness", "closeness", "pressure", "node_degree"]
-reinforcement_percentages = [3, 6, 10]
+reinforcement_percentages = [3,6,10,50,100]
 
 # ======================================================================================
 
@@ -39,7 +40,8 @@ if __name__ == "__main__":
 
     # Generar los valores de PGA para todas las simulaciones
     pga_values = [generate_pga_value() for _ in range(num_realizations_per_iteration)]
-
+    
+    pga_and_damage_states_list = get_damage_states(pga_values,inp_file)
     print("\n===============================")
     print("Starting no earthquake experiment")
     # Run no earthquake experiment
@@ -51,7 +53,7 @@ if __name__ == "__main__":
         leak_start_time=leak_start_time,
         required_pressure=required_pressure,
         num_realizations=1,
-        pga_values=[],
+        pga_values_and_damage_states=[],
         max_workers=max_workers,
         total_duration=total_duration,
         minimum_pressure=minimum_pressure,
@@ -126,7 +128,7 @@ if __name__ == "__main__":
         leak_start_time=leak_start_time,
         required_pressure=required_pressure,
         num_realizations=num_realizations_per_iteration,
-        pga_values=pga_values,
+        pga_values_and_damage_states=pga_and_damage_states_list,
         max_workers=max_workers,
         total_duration=total_duration,
         minimum_pressure=minimum_pressure,
@@ -200,7 +202,7 @@ if __name__ == "__main__":
                 leak_start_time=leak_start_time,
                 required_pressure=required_pressure,
                 num_realizations=num_realizations_per_iteration,
-                pga_values=pga_values,
+                pga_values_and_damage_states=pga_and_damage_states_list,
                 max_workers=max_workers,
                 total_duration=total_duration,
                 minimum_pressure=minimum_pressure,
@@ -258,3 +260,5 @@ if __name__ == "__main__":
     print(f"Completed in {format_time(start_time, end_time)}")
     print(f"Completed at {end_datetime_str}")
     print("======================")
+    print(f"Experiment folder: {experiment_folder}")
+    winsound.PlaySound("alarm.wav", winsound.SND_FILENAME)
